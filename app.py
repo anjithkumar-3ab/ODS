@@ -1,15 +1,18 @@
 import torch
 import cv2
 from tkinter import Tk, filedialog, Button, Label
+from PIL import Image, ImageTk
 import os
 import threading
 
 # Load YOLOv5 model
 model = torch.hub.load('ultralytics/yolov5', 'yolov5l', pretrained=True)
 
-video_recording = False
-video_writer = None
+# Global for camera recording
+recording = False
 cap = None
+out = None
+
 
 def browse_from_device():
     """Let user select an image or video file."""
@@ -19,6 +22,7 @@ def browse_from_device():
         filetypes=[("Media files", "*.jpg *.jpeg *.png *.mp4 *.avi *.mov *.mkv")]
     )
     return file_path
+
 
 def capture_image():
     """Capture a single image from webcam."""
@@ -51,64 +55,82 @@ def capture_image():
     cv2.destroyAllWindows()
     return None
 
-def start_video_recording():
-    global video_recording, video_writer, cap
+
+def capture_video_gui():
+    """Combined GUI for webcam preview and video recording."""
+    def show_frame():
+        global recording, cap, out
+        if not cap.isOpened():
+            return
+
+        ret, frame = cap.read()
+        if ret:
+            # Display in GUI
+            cv2image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            img = cv2.resize(cv2image, (400, 300))
+            img = Image.fromarray(img)
+            imgtk = ImageTk.PhotoImage(image=img)
+            video_label.imgtk = imgtk
+            video_label.configure(image=imgtk)
+
+            if recording:
+                out.write(frame)
+
+        video_label.after(10, show_frame)
+
+    def start_recording():
+        global recording
+        recording = True
+        print("Recording started...")
+
+    def stop_recording():
+        global recording, cap, out
+        recording = False
+        print("Recording stopped.")
+        cap.release()
+        if out:
+            out.release()
+        root.destroy()
+
+    # Setup GUI
+    root = Tk()
+    root.title("Video Recorder")
+    root.geometry("450x400")
+
+    video_label = Label(root)
+    video_label.pack()
+
+    Button(root, text="Start Recording", command=start_recording).pack(pady=5)
+    Button(root, text="Stop and Save", command=stop_recording).pack(pady=5)
+
+    # Initialize webcam
+    global cap, out
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("Failed to open webcam.")
-        return
+        root.destroy()
+        return None
 
     width, height = int(cap.get(3)), int(cap.get(4))
-    video_writer = cv2.VideoWriter("captured_video.avi", cv2.VideoWriter_fourcc(*'XVID'), 20.0, (width, height))
-    video_recording = True
-    print("Video recording started...")
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    out = cv2.VideoWriter("captured_video.avi", fourcc, 20.0, (width, height))
 
-    while video_recording:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        video_writer.write(frame)
-        cv2.imshow("Recording Video", frame)
-        if cv2.waitKey(1) & 0xFF == 27:
-            break
-
-    cv2.destroyAllWindows()
-
-def stop_video_recording(root):
-    global video_recording, cap, video_writer
-    video_recording = False
-    if cap:
-        cap.release()
-    if video_writer:
-        video_writer.release()
-    cv2.destroyAllWindows()
-    print("Video recording stopped.")
-    root.destroy()
-
-def capture_video_gui():
-    """Start a GUI to control video recording."""
-    root = Tk()
-    root.title("Camera Video Recorder")
-    root.geometry("300x150")
-
-    Label(root, text="Webcam Video Capture").pack(pady=10)
-
-    Button(root, text="Start Video", command=lambda: threading.Thread(target=start_video_recording).start()).pack(pady=5)
-    Button(root, text="Stop Video", command=lambda: stop_video_recording(root)).pack(pady=5)
-
+    show_frame()
     root.mainloop()
     return "captured_video.avi"
 
+
 def process_image(path):
-    """Run YOLOv5 on image."""
+    """Run YOLOv5 on an image."""
     results = model(path)
     results.print()
     results.show()
     results.save(save_dir='E:/image_classifier/runs/detect')
     print("Image results saved to E:/image_classifier/runs/detect")
 
+
 def process_video(path):
-    """Run YOLOv5 on video frame-by-frame."""
+    """Run YOLOv5 on a video file."""
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         print("Could not open video.")
@@ -139,7 +161,6 @@ def process_video(path):
         cv2.imshow(window_name, resized)
 
         if cv2.waitKey(1) & 0xFF == 27 or cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
-            print("Stopped.")
             break
 
     cap.release()
@@ -148,45 +169,46 @@ def process_video(path):
     cv2.destroyAllWindows()
     print(f"Video results saved to: {save_path}")
 
+
 # --- Main Program ---
+if __name__ == '__main__':
+    print("Choose input method:")
+    print("1. Browse from device")
+    print("2. Use camera")
 
-print("Choose input method:")
-print("1. Browse from device")
-print("2. Use camera")
+    choice = input("Enter 1 or 2: ").strip()
+    source = None
+    is_video = False
 
-choice = input("Enter 1 or 2: ").strip()
-source = None
-is_video = False
-
-if choice == '1':
-    source = browse_from_device()
-    if source:
-        ext = os.path.splitext(source)[-1].lower()
-        is_video = ext in ['.mp4', '.avi', '.mov', '.mkv']
-elif choice == '2':
-    print("Choose capture type:")
-    print("1. Capture image")
-    print("2. Capture video")
-    sub_choice = input("Enter 1 or 2: ").strip()
-    if sub_choice == '1':
-        source = capture_image()
-        is_video = False
-    elif sub_choice == '2':
-        source = capture_video_gui()
-        is_video = True
+    if choice == '1':
+        source = browse_from_device()
+        if source:
+            ext = os.path.splitext(source)[-1].lower()
+            is_video = ext in ['.mp4', '.avi', '.mov', '.mkv']
+    elif choice == '2':
+        print("Choose capture type:")
+        print("1. Capture image")
+        print("2. Capture video")
+        sub_choice = input("Enter 1 or 2: ").strip()
+        if sub_choice == '1':
+            source = capture_image()
+            is_video = False
+        elif sub_choice == '2':
+            source = capture_video_gui()
+            is_video = True
+        else:
+            print("Invalid sub-option.")
+            exit()
     else:
-        print("Invalid sub-option.")
+        print("Invalid choice.")
         exit()
-else:
-    print("Invalid choice.")
-    exit()
 
-if not source or not os.path.exists(source):
-    print("No valid input received.")
-    exit()
+    if not source or not os.path.exists(source):
+        print("No valid input received.")
+        exit()
 
-# Run YOLO inference
-if is_video:
-    process_video(source)
-else:
-    process_image(source)
+    # Run YOLO inference
+    if is_video:
+        process_video(source)
+    else:
+        process_image(source)
